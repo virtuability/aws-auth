@@ -1,0 +1,30 @@
+[
+  {
+    "ParameterKey"    : "pApplicationName",
+    "ParameterValue"  : "auth"
+  },
+  {
+    "ParameterKey"    : "pIsRouteToLive",
+    "ParameterValue"  : "true"
+  },
+  {
+    "ParameterKey"    : "pApplicationTestBaseUrl",
+    "ParameterValue"  : "https://api.tst.web-test.info"
+  },
+  {
+    "ParameterKey"    : "pApplicationTestSecrets",
+    "ParameterValue"  : "auth-integration-test"
+  },
+  {
+    "ParameterKey"    : "pApplicationTestSecretsArnName",
+    "ParameterValue"  : "auth-integration-test-tpHbUE"
+  },
+  {
+    "ParameterKey"    : "pGitHubRepo",
+    "ParameterValue"  : "aws-auth"
+  },
+  {
+    "ParameterKey"    : "pGitHubBranch",
+    "ParameterValue"  : "master"
+  }
+]

@@ -1,0 +1,839 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Authentication Stack
+
+Parameters:
+  pAppName:
+    Type: String
+    Description: Unique namespace for Cognito-based app stack resources
+  pEnvironment:
+    Type: String
+    Description: Authentication Stack environment
+    AllowedValues: [ "development", "test", "production" ]
+  pBuildTag:
+    Type: String
+    Description: The version control Commit Id
+  pParentHostedZoneName:
+    Type: String
+    Description: The parent hosted zone to create the Authentication Stack sub-domain in
+  pAuthDomainName:
+    Type: String
+    Description: The Authentication Stack sub-domain endpoint (hosted zone)
+  pApiDomainName:
+    Type: String
+    Description: The Authentication Stack Authentication API domain name for e.g. app redirects
+  pAndroidAppClientCallbackURL:
+    Type: String
+    Description: The callback URL for Android applications (stage ONE of sign-up, sign-in, forgot password and resend code)
+  pAndroidAppClientLogoutURL:
+    Type: String
+    Description: The logout URL for Android applications (stage TWO of sign-up, sign-in, forgot password and resend code)
+  pIosAppClientCallbackURL:
+    Type: String
+    Description: The callback URL for IOS applications (stage ONE of sign-up, sign-in, forgot password and resend code)
+  pIosAppClientLogoutURL:
+    Type: String
+    Description: The logout URL for IOS applications
+  pLogLevel:
+    Type: String
+    Description: The logging level to use in Lambda code
+  pPublishUserEvents:
+    Type: String
+    Description: Whether to publish user events to SNS topic
+    AllowedValues: [ 'true', 'false' ]
+
+Conditions:
+  cIsProduction: !Equals [ !Ref pEnvironment, "production" ]
+
+Mappings: {}
+
+Resources:
+
+###########################################################
+### Cognito Triggers
+###########################################################
+
+  rCognitoUserPreSignUpLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref rCognitoUserPreSignUpFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !Sub 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*'
+
+  rCognitoUserPreSignUpFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      AutoPublishAlias: 'current'
+      FunctionName: !Sub '${pAppName}-${pEnvironment}-CognitoUserPreSignUpFunction'
+      Handler: main.handler
+      Runtime: python3.7
+      CodeUri: ./CognitoUserPreSignUp/
+      MemorySize: 128
+      Timeout: 15
+      Role: !GetAtt rCognitoAuthFunctionIAMRole.Arn
+      Environment:
+        Variables:
+          LOG_LEVEL: !Ref pLogLevel
+          BUILD_TAG: !Ref pBuildTag # Force Cloudformation/Secrets Manager evaluation on each commit
+
+  rCognitoUserPreSignUpLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${rCognitoUserPreSignUpFunction}'
+      RetentionInDays: 90
+
+  # Encrypt the Cloudwatch Logs
+  # Custom resource as cfn doesn't (yet) support associating KMS keys with log groups
+  rCognitoUserPreSignUpLogGroupKeyAssociation:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !ImportValue CloudWatchLogGroupKeyAssociationFunctionArn
+      KeyArn: !ImportValue CloudWatchLogGroupKeyArn
+      LogGroupName: !Ref rCognitoUserPreSignUpLogGroup
+
+  rCognitoUserSignInLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref rCognitoUserSignInFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !Sub 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*'
+
+  rCognitoUserSignInFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      AutoPublishAlias: 'current'
+      FunctionName: !Sub '${pAppName}-${pEnvironment}-CognitoUserSignInFunction'
+      Handler: main.handler
+      Runtime: python3.7
+      CodeUri: ./CognitoUserSignIn/
+      MemorySize: 128
+      Timeout: 15
+      Role: !GetAtt rCognitoAuthFunctionIAMRole.Arn
+      Environment:
+        Variables:
+          LOG_LEVEL: !Ref pLogLevel
+          BUILD_TAG: !Ref pBuildTag  # Force Cloudformation/Secrets Manager evaluation on each commit
+          PUBLISH_USER_EVENTS: !Ref pPublishUserEvents
+          USER_EVENT_TOPIC: !Ref rCognitoUserEventTopic
+
+  rCognitoUserSignInLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${rCognitoUserSignInFunction}'
+      RetentionInDays: 90
+
+  # Encrypt the Cloudwatch Logs
+  # Custom resource as cfn doesn't (yet) support associating KMS keys with log groups
+  rCognitoUserSignInLogGroupKeyAssociation:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !ImportValue CloudWatchLogGroupKeyAssociationFunctionArn
+      KeyArn: !ImportValue CloudWatchLogGroupKeyArn
+      LogGroupName: !Ref rCognitoUserSignInLogGroup
+
+  rCognitoCreateUserPostConfirmationLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref rCognitoCreateUserPostConfirmationFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !Sub 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*'
+
+  rCognitoCreateUserPostConfirmationFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      AutoPublishAlias: 'current'
+      FunctionName: !Sub '${pAppName}-${pEnvironment}-CreateUserPostConfirmationFunction'
+      Handler: main.handler
+      Runtime: python3.7
+      CodeUri: ./CognitoCreateUserPostConfirmation/
+      MemorySize: 128
+      Timeout: 15
+      Role: !GetAtt rCognitoAuthFunctionIAMRole.Arn
+      Environment:
+        Variables:
+          LOG_LEVEL: !Ref pLogLevel
+          BUILD_TAG: !Ref pBuildTag  # Force Cloudformation/Secrets Manager evaluation on each commit
+          PUBLISH_USER_EVENTS: !Ref pPublishUserEvents
+          USER_POOL_ID: !Ref rUserPool
+          USER_EVENT_TOPIC: !Ref rCognitoUserEventTopic
+
+  rCognitoCreateUserPostConfirmationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${rCognitoCreateUserPostConfirmationFunction}'
+      RetentionInDays: 90
+
+  # Encrypt the Cloudwatch Logs
+  # Custom resource as cfn doesn't (yet) support associating KMS keys with log groups
+  rCognitoCreateUserPostConfirmationLogGroupKeyAssociation:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !ImportValue CloudWatchLogGroupKeyAssociationFunctionArn
+      KeyArn: !ImportValue CloudWatchLogGroupKeyArn
+      LogGroupName: !Ref rCognitoCreateUserPostConfirmationLogGroup
+
+  rCognitoAuthFunctionIAMRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+        - 'arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess'
+        - !Ref rCognitoAuthFunctionIAMPolicy
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "sts:AssumeRole"
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+
+  # Create and attach managed policy to avoid circular dependencies
+  rCognitoAuthFunctionIAMPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: 'Cognito Auth functions policy'
+      ManagedPolicyName: !Sub '${pAppName}-${pEnvironment}-cognito-auth-function-policy'
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: Allow
+            Action: sns:publish
+            Resource: !Ref rCognitoUserEventTopic
+          - Effect: Allow
+            Action:
+              - kms:GenerateDataKey
+              - kms:Decrypt
+            Resource: !GetAtt rUserInfoEncryptionKey.Arn
+          - Effect: Allow
+            Action:
+              - cognito-idp:AdminGetUser
+              - cognito-idp:AdminAddUserToGroup
+              - cognito-idp:AdminUpdateUserAttributes
+              - cognito-idp:AdminDisableUser
+              - cognito-idp:AdminEnableUser
+              - cognito-idp:ListUsers
+            Resource: !GetAtt rUserPool.Arn
+
+  rUserInfoEncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: 'Used to encrypt the user and user defaults events because they may contain sensitive data'
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: Allow
+          Principal:
+            AWS:
+              - !Sub arn:aws:iam::${AWS::AccountId}:root
+          Action: kms:*
+          Resource: '*'
+
+  rUserInfoEncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${pAppName}-${pEnvironment}'
+      TargetKeyId: !Ref rUserInfoEncryptionKey
+
+  # User Events like change, migration, sign-up, sign-in
+  rCognitoUserEventTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${pAppName}-${pEnvironment}-cognito-user-event'
+      # 5 minutes between key rotations
+      KmsMasterKeyId: !Ref rUserInfoEncryptionKey
+
+  rAuthHostedZone: 
+    Type: AWS::Route53::HostedZone
+    Properties: 
+      HostedZoneConfig: 
+        Comment: !Sub '${pAuthDomainName} domain'
+      Name: !Ref pAuthDomainName
+
+  rParentHostedZoneNSRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Sub '${pParentHostedZoneName}.'
+      Comment: Authentication Stack sub-domain NS record.
+      Name: !Join [ "", [ !Ref pAuthDomainName, "." ] ]
+      Type: NS
+      TTL: '300'
+      ResourceRecords: !GetAtt rAuthHostedZone.NameServers
+
+  # Creates a role that allows Cognito to send SNS messages
+  rSNSRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal: 
+              Service: 
+              - "cognito-idp.amazonaws.com"
+            Action: 
+            - "sts:AssumeRole"
+      Policies:
+        - PolicyName: !Sub "${pAppName}-${pEnvironment}-cognito-idp-policy"
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement:
+            - Effect: 'Allow'
+              Action: 'sns:publish'
+              Resource: '*'
+            - Effect: 'Allow'
+              Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:DescribeLogStreams'
+              - 'logs:PutLogEvents'
+              Resource:
+              - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/cognito/*'
+
+  #####################################################################
+  # NOTE ! NOTE ! NOTE ! NOTE ! NOTE ! NOTE ! NOTE ! NOTE ! NOTE !
+  # Be very-very careful changing the user pool! If you change the
+  # wrong resource parameters below you can end up with Cloudformation
+  # building a *new* user pool with no users (although retaining the
+  # old one as per DeletionPolicy)
+  # DO NOT change the user pool Schema, UsernameAttributes,
+  # AutoVerifiedAttributes, UserPoolName
+  # You MAY change LambdaConfig
+  # IF IN DOUBT, PLEASE CONTACT AWS SUPPORT FIRST
+  # NOTE ! NOTE ! NOTE ! NOTE ! NOTE ! NOTE ! NOTE ! NOTE ! NOTE !
+  #####################################################################
+  rUserPool:
+    DeletionPolicy: Retain
+    Type: 'AWS::Cognito::UserPool'
+    Properties:
+      UserPoolName: !Sub '${pAppName}-${pEnvironment}-user-pool'
+      AutoVerifiedAttributes:
+        - email
+      LambdaConfig:
+        # ARN generation here is necessary to avoid circular dependencies where the
+        # lambda requires UserPool Ref's and the UserPool requires Lambda Arn's
+        PostConfirmation: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${pAppName}-${pEnvironment}-CreateUserPostConfirmationFunction'
+        PreAuthentication: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${pAppName}-${pEnvironment}-CognitoUserSignInFunction'
+        PreSignUp: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${pAppName}-${pEnvironment}-CognitoUserPreSignUpFunction'
+        PostAuthentication: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${pAppName}-${pEnvironment}-CognitoUserSignInFunction'
+      MfaConfiguration: 'OPTIONAL'
+      SmsConfiguration:
+        ExternalId: !Sub '${pAppName}-${pEnvironment}-external'
+        SnsCallerArn: !GetAtt rSNSRole.Arn
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireUppercase: true
+      UsernameAttributes:
+        -  email
+      Schema:
+        - Name: name
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+        - Name: email
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+        - Name: phone_number
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+          # *** WARNING! *** Cloudformation will re-create the user pool
+          # if we attempt to add additional fields later on despite Cognito
+          # having no such requirement. Below is therefore a hacky attempt
+          # a future proofing by adding some generic fields.
+        - Name: field1
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+        - Name: field2
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+        - Name: field3
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+# Requires SES configuration
+#      EmailConfiguration:
+#        ReplyToEmailAddress: !Sub 'hello@${pParentHostedZoneName}'
+#        SourceArn: !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/hello@${pParentHostedZoneName}'
+      EmailVerificationSubject: !If [ cIsProduction, 'Verification', !Sub '${pEnvironment} - verification' ]
+      EmailVerificationMessage: 'Code: {####}'
+
+  rUserPoolDomain:
+    Type: 'Custom::CognitoUserPoolDomain'
+    Properties:
+      ServiceToken: !GetAtt rCustomCognitoUserPoolDomain.Arn
+      UserPoolId: !Ref rUserPool
+      CustomDomainConfig:
+        CertificateArn: !Sub '{{resolve:secretsmanager:${pAppName}-${pEnvironment}:SecretString:AuthDomainCertificateArn}}'
+      Domain: !Ref pAuthDomainName
+
+  # The current implementation of AWS::Cognito::UserPoolDomain doesn't return
+  # the required AliasTarget for the UserPoolDomainDNSARecordSetGroup and is
+  # therefore a useless construct in its current implementation - hence the
+  # need for a custom resource above.
+  # rUserPoolDomain:
+  #   Type: 'AWS::Cognito::UserPoolDomain'
+  #   Properties:
+  #     UserPoolId: !Ref rUserPool
+  #     CustomDomainConfig:
+  #       CertificateArn: !Sub '{{resolve:secretsmanager:${pAppName}-${pEnvironment}:SecretString:AuthDomainCertificateArn}}'
+  #     Domain: !Ref pAuthDomainName
+
+  rUserPoolDomainDNSARecordSetGroup:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId: !Ref rAuthHostedZone
+      Comment: Authentication Stack domain A alias record for Cognito Cloudfront distribution
+      RecordSets:
+      - Name: !Join [ "", [ !Ref pAuthDomainName, "." ] ]
+        Type: A
+        AliasTarget:
+          HostedZoneId: "Z2FDTNDATAQYW2"
+          DNSName: !GetAtt rUserPoolDomain.CloudFrontDomain
+
+  # Creates a Federated Identity pool that can issue temporary
+  # AWS tokens for access to AWS services
+  rIdentityPool:
+    Type: 'AWS::Cognito::IdentityPool'
+    Properties:
+      IdentityPoolName: !Sub '${pAppName}${pEnvironment}'
+      AllowUnauthenticatedIdentities: true
+      CognitoIdentityProviders:
+      - ClientId: !Ref rAndroidAppClient
+        ProviderName: !GetAtt rUserPool.ProviderName
+        ServerSideTokenCheck: true
+      - ClientId: !Ref rIosAppClient
+        ProviderName: !GetAtt rUserPool.ProviderName
+        ServerSideTokenCheck: true
+
+  rAndroidAppClient:
+    Type: 'AWS::Cognito::UserPoolClient'
+    Properties:
+      ClientName: !Sub '${pAppName}-${pEnvironment}-android-client'
+      GenerateSecret: false
+      UserPoolId: !Ref rUserPool
+      SupportedIdentityProviders:
+      - 'COGNITO'
+      CallbackURLs:
+      - !Ref pAndroidAppClientCallbackURL
+      LogoutURLs:
+      - !Ref pAndroidAppClientLogoutURL
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+      - code
+      AllowedOAuthScopes:
+      - openid
+      ExplicitAuthFlows:
+      - 'USER_PASSWORD_AUTH'
+
+  rIosAppClient:
+    Type: 'AWS::Cognito::UserPoolClient'
+    Properties:
+      ClientName: !Sub '${pAppName}-${pEnvironment}-ios-client'
+      GenerateSecret: false
+      UserPoolId: !Ref rUserPool
+      SupportedIdentityProviders:
+      - 'COGNITO'
+      CallbackURLs:
+      - !Ref pIosAppClientCallbackURL
+      LogoutURLs:
+      - !Ref pIosAppClientLogoutURL
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+      - code
+      AllowedOAuthScopes:
+      - openid
+      ExplicitAuthFlows:
+      - 'USER_PASSWORD_AUTH'
+
+  # Demonstrate use of client credentials for
+  # service-to-service API access
+  rApiResourceServer:
+    Type: 'AWS::Cognito::UserPoolResourceServer'
+    Properties:
+      Identifier: !Sub '${pApiDomainName}'
+      Name: !Sub '${pAppName}-${pEnvironment}-api-server'
+      UserPoolId: !Ref rUserPool
+      Scopes:
+      - ScopeName: client
+        ScopeDescription: API resource server for Client Credentials access
+
+  # Create a Client to be used for client token access
+  # in the case of service-to-service API access
+  rMachineClient:
+    Type: 'AWS::Cognito::UserPoolClient'
+    # Needs resource server & scope to exist
+    DependsOn: rApiResourceServer
+    Properties:
+      ClientName: !Sub '${pAppName}-${pEnvironment}-machine-client'
+      GenerateSecret: true
+      UserPoolId: !Ref rUserPool
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+      - client_credentials
+      AllowedOAuthScopes:
+      - !Sub '${pApiDomainName}/client'
+
+  rCustomCognitoUserPoolDomain:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      Runtime: python3.7
+      Handler: main.handler
+      MemorySize: 128
+      Timeout: 15
+      Role: !GetAtt rCustomCognitoUserPoolDomainRole.Arn
+      CodeUri: ./CustomCognitoUserPoolDomain/
+
+  rCustomCognitoUserPoolDomainRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+      - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      - 'arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+      - 'arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action: 'sts:AssumeRole'
+          Principal:
+            Service: lambda.amazonaws.com
+      Policies:
+      - PolicyName: !Sub '${pAppName}-${pEnvironment}-manage-user-pool-domain'
+        PolicyDocument: 
+          Version: '2012-10-17'
+          Statement: 
+          - Effect: Allow
+            Action:
+            - 'cognito-idp:CreateUserPoolDomain'
+            - 'cognito-idp:UpdateUserPoolDomain'
+            - 'cognito-idp:DeleteUserPoolDomain'
+            - 'cognito-idp:DescribeUserPoolDomain'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - 'secretsmanager:GetSecretValue'
+            Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${pAppName}-${pEnvironment}-??????'
+      - PolicyName: !Sub '${pAppName}-${pEnvironment}-update-cloudfront'
+        PolicyDocument: 
+          Version: '2012-10-17'
+          Statement: 
+          - Effect: Allow
+            Action:
+            - cloudfront:updateDistribution
+            Resource:
+            - "*"
+
+  rUserPoolLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+      - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      - 'arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+      - 'arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action: 'sts:AssumeRole'
+          Principal:
+            Service: lambda.amazonaws.com
+
+  rCognitoPublicAppUserGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      Description: 'Cognito user group for public App users'
+      GroupName: !Sub '${pAppName}-${pEnvironment}-public-app-user'
+      Precedence: 100
+#      RoleArn: String
+      UserPoolId: !Ref rUserPool
+
+  # Pinpoint app to demonstrate assigned unauthorised and user roles
+  rPinpointApp:
+    Type: AWS::Pinpoint::App
+    Properties:
+      Name: !Sub '${pAppName}-${pEnvironment}-app'
+
+  # Create a role for unauthorized/guest access to AWS resources.
+  # Very limited access. Only allows users in the previously created Identity Pool
+  rCognitoUnAuthorizedRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+        - Effect: 'Allow'
+          Principal: 
+            Federated: 'cognito-identity.amazonaws.com'
+          Action: 
+          - 'sts:AssumeRoleWithWebIdentity'
+          Condition:
+            StringEquals: 
+              'cognito-identity.amazonaws.com:aud': !Ref rIdentityPool
+            'ForAnyValue:StringLike':
+              'cognito-identity.amazonaws.com:amr': unauthenticated
+      Policies:
+      - PolicyName: !Sub '${pAppName}-${pEnvironment}-cognito-unauthorized-policy'
+        PolicyDocument: 
+          Version: "2012-10-17"
+          Statement: 
+          - Effect: 'Allow'
+            Action:
+            - 'mobiletargeting:UpdateEndpoint'
+            - 'mobiletargeting:PutEvents'
+            Resource: !Sub 'arn:aws:mobiletargeting:*:${AWS::AccountId}:apps/${rPinpointApp}*'
+
+  # Create a role for authorized access to AWS resources
+  # with users only from the Identity Pool
+  rCognitoAuthorizedRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+        - Effect: "Allow"
+          Principal: 
+            Federated: 'cognito-identity.amazonaws.com'
+          Action: 
+          - 'sts:AssumeRoleWithWebIdentity'
+          Condition:
+            StringEquals: 
+              'cognito-identity.amazonaws.com:aud': !Ref rIdentityPool
+            'ForAnyValue:StringLike':
+              'cognito-identity.amazonaws.com:amr': !Sub 'cognito-idp.${AWS::Region}.amazonaws.com/${rUserPool}'
+#              'cognito-identity.amazonaws.com:amr': authenticated
+      Policies:
+      - PolicyName: !Sub '${pAppName}-${pEnvironment}-cognito-authorized-policy'
+        PolicyDocument: 
+          Version: "2012-10-17"
+          Statement: 
+          - Effect: "Allow"
+            Action:
+            - 'mobiletargeting:UpdateEndpoint'
+            - 'mobiletargeting:PutEvents'
+            Resource: '*'
+  
+  # Assigns the roles to the Identity Pool
+  IdentityPoolRoleMapping:
+    Type: "AWS::Cognito::IdentityPoolRoleAttachment"
+    Properties:
+      IdentityPoolId: !Ref rIdentityPool
+      Roles:
+        authenticated: !GetAtt rCognitoAuthorizedRole.Arn
+        unauthenticated: !GetAtt rCognitoUnAuthorizedRole.Arn
+
+  rApiDnsRecordSetGroup:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName: !Sub '${pParentHostedZoneName}.'
+      Comment: Domain A record for Cloudfront
+      RecordSets:
+      - Name: !Sub '${pApiDomainName}.'
+        Type: A
+        AliasTarget:
+          HostedZoneId: !GetAtt rApiDomain.DistributionHostedZoneId
+          DNSName: !GetAtt rApiDomain.DistributionDomainName
+
+  rApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Auth:
+        Authorizers:
+          CognitoUserPoolAuthoriser:
+            UserPoolArn: !GetAtt rUserPool.Arn
+
+  rApiBasePathMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    DependsOn: [rApiDomain]
+    Properties:
+      RestApiId: !Ref rApi
+      DomainName: !Ref pApiDomainName
+      Stage: Prod
+
+  rApiDomain:
+    Type: AWS::ApiGateway::DomainName
+    Properties:
+      CertificateArn: !Sub '{{resolve:secretsmanager:${pAppName}-${pEnvironment}:SecretString:ApiDomainCertificateArn}}'
+      DomainName: !Ref pApiDomainName
+
+  rApiFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      FunctionName: !Sub '${pAppName}-${pEnvironment}-ApiFunction'
+      Runtime: python3.7
+      Handler: main.handler
+      CodeUri: ./Api/
+      MemorySize: 128
+      Timeout: 15
+      Role: !GetAtt rCognitoAuthFunctionIAMRole.Arn
+      Environment:
+        Variables:
+          LOG_LEVEL: !Ref pLogLevel
+          BUILD_TAG: !Ref pBuildTag  # Force Cloudformation/Secrets Manager evaluation on each commit
+          ANDROID_APP_CLIENT_IDS : !Ref rAndroidAppClient
+          IOS_APP_CLIENT_IDS : !Ref rIosAppClient
+      Events:
+        User:
+          Type: Api
+          Properties:
+            Path: '/user'
+            Method: get
+            RestApiId: !Ref rApi
+            Auth:
+              Authorizer: CognitoUserPoolAuthoriser
+        Guest:
+          Type: Api
+          Properties:
+            Path: '/guest'
+            Method: get
+            RestApiId: !Ref rApi
+        # TODO: Demonstrate client credentials access
+        # Client:
+        #   Type: Api
+        #   Properties:
+        #     Path: '/client'
+        #     Method: get
+        #     RestApiId: !Ref rApi
+
+  rApiFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${rApiFunction}'
+      RetentionInDays: 90
+
+  # Encrypt the Cloudwatch Logs
+  # Custom resource as cfn doesn't (yet) support associating KMS keys with log groups
+  rApiFunctionLogGroupKeyAssociation:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !ImportValue CloudWatchLogGroupKeyAssociationFunctionArn
+      KeyArn: !ImportValue CloudWatchLogGroupKeyArn
+      LogGroupName: !Ref rApiFunctionLogGroup
+
+  rDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${pAppName}-${pEnvironment}-Dashboard'
+      DashboardBody: !Sub |
+        {
+          "widgets" : [
+            {
+              "type" : "metric",
+              "x" : 0,
+              "y" : 0,
+              "width" : 8,
+              "height" : 6,
+              "properties" : {
+                "title" : "SignUps",
+                "metrics": [
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "${rCognitoUserPreSignUpFunction}", { "id": "presignupinvocations", "label": "Pre-SignUp Invocations", "stat": "Sum", "yAxis": "left" } ],
+                  [ "AWS/Lambda", "Errors", "FunctionName", "${rCognitoUserPreSignUpFunction}", { "id": "presignuperrors", "label": "Pre-SignUp Errors", "stat": "Sum", "yAxis": "left" } ],
+                  [ "AWS/Lambda", "Duration", "FunctionName", "${rCognitoUserPreSignUpFunction}", { "id": "presignupduration", "label": "Pre-SignUp Duration", "stat": "Maximum", "yAxis": "right" } ],
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "${rCognitoCreateUserPostConfirmationFunction}", { "id": "postsignupinvocations", "label": "Post-SignUp Invocations", "stat": "Sum", "yAxis": "left" } ],
+                  [ "AWS/Lambda", "Errors", "FunctionName", "${rCognitoCreateUserPostConfirmationFunction}", { "id": "postsignuperrors", "label": "Post-SignUp Errors", "stat": "Sum", "yAxis": "left" } ],
+                  [ "AWS/Lambda", "Duration", "FunctionName", "${rCognitoCreateUserPostConfirmationFunction}", { "id": "postsignupduration", "label": "Post-SignUp Duration", "stat": "Maximum", "yAxis": "right" } ]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "stacked": false,
+                "yAxis": { "left":{ "min": 0 }, "right":{ "min": 0 } }
+              }
+            },
+            {
+              "type" : "metric",
+              "x" : 8,
+              "y" : 0,
+              "width" : 8,
+              "height" : 6,
+              "properties" : {
+                "title" : "SignIns",
+                "metrics": [
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "${rCognitoUserSignInFunction}", { "id": "prepostsignupinvocations", "label": "Pre-SignIn Invocations", "stat": "Sum", "yAxis": "left" } ],
+                  [ "AWS/Lambda", "Errors", "FunctionName", "${rCognitoUserSignInFunction}", { "id": "prepostsignuperrors", "label": "Pre-SignIn Errors", "stat": "Sum", "yAxis": "left" } ],
+                  [ "AWS/Lambda", "Duration", "FunctionName", "${rCognitoUserSignInFunction}", { "id": "prepostsignupduration", "label": "Pre-SignIn Duration", "stat": "Maximum", "yAxis": "right" } ]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "stacked": false,
+                "yAxis": { "left":{ "min": 0 }, "right":{ "min": 0 } }
+              }
+            },
+            {
+              "type" : "metric",
+              "x" : 16,
+              "y" : 0,
+              "width" : 8,
+              "height" : 6,
+              "properties" : {
+                "title" : "API",
+                "metrics": [
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "${rApiFunction}", { "id": "apifunctioninvocations", "label": "API Invocations", "stat": "Sum", "yAxis": "left" } ],
+                  [ "AWS/Lambda", "Errors", "FunctionName", "${rApiFunction}", { "id": "apifunctionerrors", "label": "API Errors", "stat": "Sum", "yAxis": "left" } ],
+                  [ "AWS/Lambda", "Duration", "FunctionName", "${rApiFunction}", { "id": "apifunctionduration", "label": "API Duration", "stat": "Maximum", "yAxis": "right" } ]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "stacked": false,
+                "yAxis": { "left":{ "min": 0 }, "right":{ "min": 0 } }
+              }
+            }
+          ]
+        }
+
+Outputs:
+  oUserPool:
+    Value: !Ref rUserPool
+    Export:
+      Name: !Sub '${pAppName}-${pEnvironment}-user-pool'
+
+  oAndroidAppClient:
+    Value: !Ref rAndroidAppClient
+    Export:
+      Name: !Sub '${pAppName}-${pEnvironment}-android-app-client'
+
+  oIosAppClient:
+    Value: !Ref rIosAppClient
+    Export:
+      Name: !Sub '${pAppName}-${pEnvironment}-ios-app-client'
+
+  oIdentityPool:
+    Value: !Ref rIdentityPool
+    Export:
+      Name: !Sub '${pAppName}-${pEnvironment}-identity-pool'
+
+  oBuildTag:
+    Value: !Ref pBuildTag
+
+  oCognitoUserEventTopic:
+    Value: !Ref rCognitoUserEventTopic
+    Export:
+      Name: !Sub '${pAppName}-${pEnvironment}-user-event-topic'
+
+  oAndroidAppClientSignInUrl:
+    Value: !Sub 'https://${pAuthDomainName}/login?response_type=code&client_id=${rAndroidAppClient}&redirect_uri=${pAndroidAppClientCallbackURL}'
+
+  oIosAppClientSignInUrl:
+    Value: !Sub 'https://${pAuthDomainName}/login?response_type=code&client_id=${rIosAppClient}&redirect_uri=${pIosAppClientCallbackURL}'
+
+  # From: https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-tokens-verifying-a-jwt.html
+  oJsonWebKeyUrl:
+    Value: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${rUserPool}/.well-known/jwks.json'
+    Export:
+      Name: !Sub '${pAppName}-${pEnvironment}-json-webkey-url'

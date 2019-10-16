@@ -1,0 +1,5 @@
+python-json-logger==0.1.11
+pyyaml==5.1.2
+context-log==0.1.2
+boto3==1.10.14
+username-validator==0.0.1

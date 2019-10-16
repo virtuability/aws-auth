@@ -1,0 +1,434 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Application CodePipeline
+Parameters:
+
+  pApplicationName:
+    Description: Application name
+    Type: String
+
+  pIsRouteToLive:
+    Description: Indicator of whether to build whole route-to-live or just a development pipeline stub
+    Type: String
+    AllowedValues: [ 'true', 'false' ]
+
+  pApplicationTestBaseUrl:
+    Description: The base URL of the application, e.g. https://api.tst.web-test.info
+    Type: String
+
+  pApplicationTestSecretsName:
+    Description: The name of the Secrets Manager secret bundle to fetch test details from
+    Type: String
+
+  pApplicationTestSecretsArnName:
+    Description: Secrets Manager ARN for secrets required for integration testing
+    Type: String
+
+  pGitHubRepo:
+    Type: String
+
+  pGitHubBranch:
+    Type: String
+
+Conditions:
+  cIsRouteToLive:
+    !Equals [ !Ref pIsRouteToLive, "true" ]
+
+  cIsSingleStage:
+    !Equals [ !Ref pIsRouteToLive, "false" ]
+
+Resources:
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${pApplicationName}-codebuild-role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+              - codebuild.amazonaws.com
+            Action:
+            - sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - !Ref CodeBuildManagedPolicy
+
+  CodeBuildManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${pApplicationName}-codebuild-policy'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Resource: "*"
+            Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+          - Resource:
+            -  !Join [ "", [ "arn:aws:s3:::", !ImportValue PipelineArtifactBucket ] ]
+            -  !Join [ "", [ "arn:aws:s3:::", !ImportValue PipelineArtifactBucket, "/*" ] ]
+            Effect: Allow
+            Action:
+            - s3:GetObject
+            - s3:PutObject
+            - s3:GetObjectVersion
+            - s3:GetBucketPolicy
+            - s3:ListBucket
+          - Resource: !ImportValue PipelineEncryptionKeyArn
+            Effect: Allow
+            Action:
+            - kms:Encrypt
+            - kms:Decrypt
+            - kms:ReEncrypt*
+            - kms:GenerateDataKey*
+            - kms:DescribeKey
+          - Resource:
+            - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${pApplicationTestSecretsArnName}'
+            Effect: Allow
+            Action:
+            - secretsmanager:GetSecretValue
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Join [ "", [ !Ref pApplicationName , "-build" ] ]
+      Description: !Sub "${pApplicationName} build project"
+      EncryptionKey: !ImportValue PipelineEncryptionKey
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Cache:
+        Type: S3
+        Location: !Sub
+        - '${CacheBucket}/dependencycache/${pApplicationName}'
+        - { CacheBucket: !ImportValue PipelineArtifactBucket }
+      Artifacts:
+        Location: !ImportValue PipelineArtifactBucket
+        Type: "S3"
+      Source:
+        Location: !Join [ "", [ !ImportValue PipelineArtifactBucket, "/source.zip" ] ]
+        Type: "S3"
+        BuildSpec: buildspec.yml
+      Environment:
+        ComputeType: "BUILD_GENERAL1_MEDIUM"
+        Image: "aws/codebuild/standard:2.0"
+        Type: "LINUX_CONTAINER"
+        EnvironmentVariables:
+        - Name: AWS_DEFAULT_REGION
+          Value: !Ref AWS::Region
+        - Name: DEPLOY_ARTIFACT_BUCKET
+          Value: !ImportValue PipelineArtifactBucket
+        - Name: APPLICATION_NAME
+          Value: !Ref pApplicationName
+        - Name: AWS_ACCOUNT_ID
+          Value: !Ref 'AWS::AccountId'
+      TimeoutInMinutes: 15
+
+  CodeBuildTestProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Join [ "", [ !Ref pApplicationName , "-test" ] ]
+      Description: !Sub '${pApplicationName} test project'
+      EncryptionKey: !ImportValue PipelineEncryptionKey
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Location: !ImportValue PipelineArtifactBucket
+        Type: "S3"
+      Source:
+        Location: !Join [ "", [ !ImportValue PipelineArtifactBucket, "/source.zip" ] ]
+        Type: "S3"
+        BuildSpec: testspec.yml
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: "aws/codebuild/standard:2.0"
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+        - Name: APP_URL
+          Value: !Ref pApplicationTestBaseUrl
+        - Name: SECRET_NAME
+          Value: !Ref pApplicationTestSecretsName
+        - Name: APPLICATION_NAME
+          Value: !Ref pApplicationName
+      TimeoutInMinutes: 15
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${pApplicationName}-codepipeline-role'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - codepipeline.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+      - !Ref CodePipelinePolicy
+
+  CodePipelinePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${pApplicationName}-codepipeline-policy'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Action:
+          - codebuild:StartBuild
+          - codebuild:BatchGetBuilds
+          Resource:
+          - !GetAtt CodeBuildProject.Arn
+          - !GetAtt CodeBuildTestProject.Arn
+        - Effect: Allow
+          Action:
+          - kms:Encrypt
+          - kms:Decrypt
+          - kms:ReEncrypt*
+          - kms:GenerateDataKey*
+          - kms:DescribeKey
+          Resource: !ImportValue PipelineEncryptionKeyArn
+        - Effect: Allow
+          Action:
+          - s3:PutObject
+          - s3:GetObject
+          - s3:GetObjectVersion
+          - s3:GetBucketVersioning
+          - s3:ListBucket
+          Resource:
+          - !Join [ "", [ "arn:aws:s3:::", !ImportValue PipelineArtifactBucket, "/*" ] ]
+          - !Join [ "", [ "arn:aws:s3:::", !ImportValue PipelineArtifactBucket ] ]
+        - Effect: Allow
+          Action:
+          - sts:AssumeRole
+          Resource:
+          - !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:SharedServicesAccount}}:role/LZCrossAccountPipelineRole'
+          - !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:DevelopmentAccount}}:role/LZCrossAccountPipelineRole'
+          - !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:TestAccount}}:role/LZCrossAccountPipelineRole'
+          - !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:ProductionAccount}}:role/LZCrossAccountPipelineRole'
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      ArtifactStore:
+        Type: S3
+        Location: !ImportValue PipelineArtifactBucket
+        EncryptionKey:
+          Id: !ImportValue PipelineEncryptionKey
+          Type: KMS
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: App
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: '1'
+                Provider: GitHub
+              Configuration:
+                Repo: !Ref pGitHubRepo
+                Branch: !Ref pGitHubBranch
+                Owner: !Sub '{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:GitHubUser}}'
+                OAuthToken: !Sub '{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:GitHubToken}}'
+              OutputArtifacts:
+              - Name: App
+              RunOrder: 1
+
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              InputArtifacts:
+              - Name: App
+              OutputArtifacts:
+              - Name: BuildOutput
+              RunOrder: 1
+
+        - !If
+          - cIsSingleStage
+          - Name: DeployToDevelopment
+            Actions:
+            - Name: CreateChangeSetDev
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ChangeSetName: !Sub '${pApplicationName}-development'
+                ActionMode: CHANGE_SET_REPLACE
+                StackName: !Sub '${pApplicationName}-development'
+                Capabilities: 'CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND'
+                TemplatePath: BuildOutput::app-main.packaged
+                RoleArn: !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:DevelopmentAccount}}:role/LZCrossAccountCloudformationRole'
+                ParameterOverrides: !Sub |
+                  {
+                    "pBuildTag" : { "Fn::GetParam" : ["BuildOutput", "build_info.json", "BuildTag"]},
+                    "pAppName" : "${pApplicationName}"
+                  }
+                TemplateConfiguration: BuildOutput::development.json
+                OutputFileName: development-stackoutputs.json
+              InputArtifacts:
+              - Name: BuildOutput
+              OutputArtifacts:
+              - Name: DevelopmentStackOutput
+              RunOrder: 1
+              RoleArn: !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:DevelopmentAccount}}:role/LZCrossAccountPipelineRole'
+
+            - Name: DeployChangeSetDev
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ChangeSetName: !Sub '${pApplicationName}-development'
+                ActionMode: CHANGE_SET_EXECUTE
+                StackName: !Sub '${pApplicationName}-development'
+                RoleArn: !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:DevelopmentAccount}}:role/LZCrossAccountCloudformationRole'
+              InputArtifacts:
+              - Name: BuildOutput
+              RunOrder: 2
+              RoleArn: !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:DevelopmentAccount}}:role/LZCrossAccountPipelineRole'
+
+          - !Ref AWS::NoValue
+
+        - !If
+          - cIsRouteToLive
+          - Name: DeployToTest
+            Actions:
+            - Name: CreateChangeSetTest
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ChangeSetName: !Sub '${pApplicationName}-test'
+                ActionMode: CHANGE_SET_REPLACE
+                StackName: !Sub '${pApplicationName}-test'
+                Capabilities: 'CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND'
+                TemplatePath: BuildOutput::app-main.packaged
+                RoleArn: !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:TestAccount}}:role/LZCrossAccountCloudformationRole'
+                ParameterOverrides: !Sub |
+                  {
+                    "pBuildTag" : { "Fn::GetParam" : ["BuildOutput", "build_info.json", "BuildTag"]},
+                    "pAppName" : "${pApplicationName}"
+                  }
+                TemplateConfiguration: BuildOutput::test.json
+                OutputFileName: test-stackoutputs.json
+
+              InputArtifacts:
+              - Name: BuildOutput
+              OutputArtifacts:
+              - Name: TestStackOutput
+              RunOrder: 2
+              RoleArn: !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:TestAccount}}:role/LZCrossAccountPipelineRole'
+
+            - Name: DeployChangeSetTest
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ChangeSetName: !Sub '${pApplicationName}-test'
+                ActionMode: CHANGE_SET_EXECUTE
+                StackName: !Sub '${pApplicationName}-test'
+                RoleArn: !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:TestAccount}}:role/LZCrossAccountCloudformationRole'
+              InputArtifacts:
+              - Name: BuildOutput
+              RunOrder: 3
+              RoleArn: !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:TestAccount}}:role/LZCrossAccountPipelineRole'
+
+          - !Ref AWS::NoValue
+
+        # Pipeline parameter APP_URL determines if to run CodeBuild-based tests
+        # against single-stage development or multi-stage test
+        - Name: DoTest
+          Actions:
+          - Name: IntegrationTest
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Provider: CodeBuild
+              Version: '1'
+            InputArtifacts:
+            - Name: App
+            Configuration:
+              ProjectName: !Ref CodeBuildTestProject
+            RunOrder: 1
+
+        - !If
+          - cIsRouteToLive
+          - Name: DeployToProduction
+            Actions:
+            - Name: Approve
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: '1'
+              RunOrder: 1
+
+            - Name: CreateChangeSetProduction
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ChangeSetName: !Sub '${pApplicationName}-production'
+                ActionMode: CHANGE_SET_REPLACE
+                StackName: !Sub '${pApplicationName}-production'
+                Capabilities: 'CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND'
+                TemplatePath: BuildOutput::app-main.packaged
+                RoleArn: !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:ProductionAccount}}:role/LZCrossAccountCloudformationRole'
+                ParameterOverrides: !Sub |
+                  {
+                    "pBuildTag" : { "Fn::GetParam" : ["BuildOutput", "build_info.json", "BuildTag"]},
+                    "pAppName" : "${pApplicationName}"
+                  }
+                TemplateConfiguration: BuildOutput::production.json
+                OutputFileName: production-stackoutputs.json
+              InputArtifacts:
+              - Name: BuildOutput
+              OutputArtifacts:
+              - Name: ProductionStackOutput
+              RunOrder: 2
+              RoleArn: !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:ProductionAccount}}:role/LZCrossAccountPipelineRole'
+
+            - Name: DeployChangeSetProduction
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ChangeSetName: !Sub '${pApplicationName}-production'
+                ActionMode: CHANGE_SET_EXECUTE
+                StackName: !Sub '${pApplicationName}-production'
+                RoleArn: !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:ProductionAccount}}:role/LZCrossAccountCloudformationRole'
+              InputArtifacts:
+              - Name: BuildOutput
+              RunOrder: 3
+              RoleArn: !Sub 'arn:aws:iam::{{resolve:secretsmanager:${pApplicationName}-pipeline:SecretString:ProductionAccount}}:role/LZCrossAccountPipelineRole'
+
+          - !Ref AWS::NoValue
+
+Outputs:
+  PipelineUrl:
+    Value: !Sub https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${Pipeline}

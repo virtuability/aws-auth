@@ -1,0 +1,22 @@
+version: 0.2
+env:
+  variables:
+    # Dummy variables for local CodeBuild tests that are overridden by CodeBuild variables
+    APPLICATION_NAME: "authdevlocal"
+    DEPLOY_ARTIFACT_BUCKET: "deploy-artifacts"
+    CODEBUILD_RESOLVED_SOURCE_VERSION: adsfadsjkfdsf234234234234324
+phases:
+  install:
+    runtime-versions:
+      python: 3.7
+    commands:
+      - echo "Installed"
+  pre_build:
+    commands:
+      - echo "pre_build"
+  build:
+    commands:
+      - echo "Tests succeeded"
+  post_build:
+    commands:
+      - echo "Done..."

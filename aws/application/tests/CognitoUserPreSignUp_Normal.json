@@ -1,0 +1,14 @@
+{
+  "callerContext": {
+    "awsSdkVersion": "aws-sdk-unknown-unknown",
+    "clientId": "1234hqgtv64l02g66sdq915678"
+  },
+  "request": {
+    "userAttributes": {
+      "email": "user@gmail.com",
+      "phone_number": "+12065550100"
+    }
+  },
+  "triggerSource" : "PreSignUp_SignUp",
+  "response": {}
+}

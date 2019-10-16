@@ -1,0 +1,30 @@
+[
+  {
+    "ParameterKey"    : "pApplicationName",
+    "ParameterValue"  : "authdev"
+  },
+  {
+    "ParameterKey"    : "pIsRouteToLive",
+    "ParameterValue"  : "false"
+  },
+  {
+    "ParameterKey"    : "pApplicationTestBaseUrl",
+    "ParameterValue"  : "https://api.dev.web-test.info"
+  },
+  {
+    "ParameterKey"    : "pApplicationTestSecretsName",
+    "ParameterValue"  : "authdev-integration-test"
+  },
+  {
+    "ParameterKey"    : "pApplicationTestSecretsArnName",
+    "ParameterValue"  : "authdev-integration-test-xV1uRf"
+  },
+  {
+    "ParameterKey"    : "pGitHubRepo",
+    "ParameterValue"  : "aws-auth"
+  },
+  {
+    "ParameterKey"    : "pGitHubBranch",
+    "ParameterValue"  : "master"
+  }
+]

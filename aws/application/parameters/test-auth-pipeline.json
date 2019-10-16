@@ -1,0 +1,23 @@
+{
+  "Parameters" : {
+    "pAppName" : "auth",
+    "pEnvironment" : "test",
+    "pBuildTag" : "",
+    "pParentHostedZoneName" : "tst.website-test.info",
+    "pAuthDomainName" : "auth.tst.website-test.info",
+    "pApiDomainName" : "api.tst.website-test.info",
+    "pAndroidAppClientCallbackURL" : "https://auth.tst.website-test.info/auth/callback",
+    "pAndroidAppClientLogoutURL" : "https://auth.tst.website-test.info/auth/logout",
+    "pIosAppClientCallbackURL" : "apptst://auth/callback",
+    "pIosAppClientLogoutURL" : "apptst://auth/logout",
+    "pLogLevel" : "DEBUG",
+    "pPublishUserEvents" : "true"
+  },
+  "Tags" : {
+    "application" : "auth",
+    "is-production" : "false",
+    "environment" : "test",
+    "owner" : "aws@website-test.info",
+    "source-code" : "https://github.com/virtuability/aws-auth"
+  }
+}
