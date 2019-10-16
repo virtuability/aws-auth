@@ -1,0 +1,4 @@
+python-json-logger==0.1.10
+pyyaml==3.13
+context-log==0.1.0
+boto3==1.9.137

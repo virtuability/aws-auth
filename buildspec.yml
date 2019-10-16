@@ -1,0 +1,51 @@
+version: 0.2
+env:
+  variables:
+    # Dummy variables for local CodeBuild tests that are overridden by CodeBuild variables
+    APPLICATION_NAME: "authdevlocal"
+    DEPLOY_ARTIFACT_BUCKET: "deploy-artifacts"
+    CODEBUILD_RESOLVED_SOURCE_VERSION: adsfadsjkfdsf234234234234324
+phases:
+  install:
+    runtime-versions:
+      python: 3.7
+    commands:
+      - pip3 install --upgrade aws-sam-cli cfn-lint
+      - echo "Installed"
+  pre_build:
+    commands:
+      # Unused parameters are OK
+      - cfn-lint --ignore-checks W2001 --template aws/application/template.yaml
+  build:
+    commands:
+      - cd aws/application
+      - BUILD_TAG=`echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7`
+      - printf '{ "BuildTag":"%s" }' "${BUILD_TAG}" >build_info.json
+      - cat build_info.json
+      # Pre-install the local module dependencies
+      #- (cd auth_common && python3 setup.py sdist)
+      # Do the build, install dependencies, run tests...
+      - mkdir -p target/
+      - sam build --base-dir . --build-dir target/ --template template.yaml
+      - sam package --template-file target/template.yaml --s3-bucket ${DEPLOY_ARTIFACT_BUCKET} --s3-prefix ${APPLICATION_NAME} --output-template-file app-main.packaged
+      # Copy environment parameter files
+      - cp parameters/development-${APPLICATION_NAME}-pipeline.json development.json
+      - cp parameters/test-${APPLICATION_NAME}-pipeline.json test.json
+      - cp parameters/production-${APPLICATION_NAME}-pipeline.json production.json
+      - cd $CODEBUILD_SRC_DIR
+  post_build:
+    commands:
+      - echo "Done..."
+artifacts:
+  files:
+    - aws/application/app-main.packaged
+    - aws/application/build_info.json
+    - aws/application/development.json
+    - aws/application/test.json
+    - aws/application/production.json
+  discard-paths: yes
+# You can cache node modules and stuff here (for future builds)
+# for faster build times
+# cache:
+#   paths:
+#    - '/root/.m2/**/*'

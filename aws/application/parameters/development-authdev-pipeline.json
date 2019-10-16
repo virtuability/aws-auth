@@ -1,0 +1,23 @@
+{
+  "Parameters": {
+    "pAppName" : "authdev",
+    "pEnvironment" : "development",
+    "pBuildTag" : "",
+    "pParentHostedZoneName" : "dev.website-test.info",
+    "pAuthDomainName" : "auth.dev.website-test.info",
+    "pApiDomainName" : "api.dev.website-test.info",
+    "pAndroidAppClientCallbackURL" : "https://auth.dev.website-test.info/auth/callback",
+    "pAndroidAppClientLogoutURL" : "https://auth.dev.website-test.info/auth/logout",
+    "pIosAppClientCallbackURL" : "appdev://auth/callback",
+    "pIosAppClientLogoutURL" : "appdev://auth/logout",
+    "pLogLevel" : "DEBUG",
+    "pPublishUserEvents" : "true"
+  },
+  "Tags": {
+    "application": "auth",
+    "is-production": "false",
+    "environment": "development",
+    "owner": "aws@website-test.info",
+    "source-code": "https://github.com/virtuability/aws-auth"
+  }
+}
